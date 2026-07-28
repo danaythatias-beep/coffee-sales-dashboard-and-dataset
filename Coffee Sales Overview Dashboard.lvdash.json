@@ -1,0 +1,934 @@
+{
+  "datasets": [
+    {
+      "name": "sales_overview",
+      "displayName": "Sales Overview Data",
+      "config": {
+        "version": "1.1",
+        "source": "workspace.default.coffee_sales",
+        "dimensions": [
+          {
+            "name": "datetime",
+            "expr": "datetime"
+          },
+          {
+            "name": "date_only",
+            "expr": "DATE(datetime)"
+          },
+          {
+            "name": "day_of_week",
+            "expr": "DAYOFWEEK(datetime)"
+          },
+          {
+            "name": "day_name",
+            "expr": "DATE_FORMAT(datetime, 'EEEE')"
+          },
+          {
+            "name": "month",
+            "expr": "DATE_TRUNC('month', datetime)"
+          },
+          {
+            "name": "cash_type",
+            "expr": "cash_type"
+          },
+          {
+            "name": "coffee_name",
+            "expr": "coffee_name"
+          }
+        ],
+        "measures": [
+          {
+            "name": "total_sales",
+            "expr": "SUM(money_amount)"
+          },
+          {
+            "name": "transaction_count",
+            "expr": "COUNT(*)"
+          },
+          {
+            "name": "avg_order_value",
+            "expr": "AVG(money_amount)"
+          },
+          {
+            "name": "unique_customers",
+            "expr": "COUNT(DISTINCT customer_id)"
+          }
+        ]
+      }
+    },
+    {
+      "name": "customer_analysis",
+      "displayName": "Customer Analysis Data",
+      "config": {
+        "version": "1.1",
+        "source": "workspace.default.coffee_sales",
+        "dimensions": [
+          {
+            "name": "customer_id",
+            "expr": "customer_id"
+          },
+          {
+            "name": "coffee_name",
+            "expr": "coffee_name"
+          }
+        ],
+        "measures": [
+          {
+            "name": "customer_spending",
+            "expr": "SUM(money_amount)"
+          },
+          {
+            "name": "purchase_count",
+            "expr": "COUNT(*)"
+          },
+          {
+            "name": "total_customers",
+            "expr": "COUNT(DISTINCT customer_id)"
+          }
+        ]
+      }
+    },
+    {
+      "name": "sales_forecast",
+      "displayName": "Sales Forecast Data",
+      "queryLines": [
+        "WITH historical_sales AS (\n",
+        "  SELECT\n",
+        "    DATE(datetime) as date,\n",
+        "    SUM(money_amount) as daily_sales\n",
+        "  FROM\n",
+        "    workspace.default.coffee_sales\n",
+        "  GROUP BY\n",
+        "    DATE(datetime)\n",
+        "),\n",
+        "forecast_result AS (\n",
+        "  SELECT\n",
+        "    date,\n",
+        "    daily_sales as actual_sales,\n",
+        "    AI_FORECAST(daily_sales, date, date) OVER (\n",
+        "        ORDER BY date\n",
+        "        ROWS BETWEEN 30 PRECEDING AND 30 FOLLOWING\n",
+        "      ) as forecast\n",
+        "  FROM\n",
+        "    historical_sales\n",
+        ")\n",
+        "SELECT\n",
+        "  date,\n",
+        "  actual_sales,\n",
+        "  forecast.forecast as forecasted_sales,\n",
+        "  forecast.prediction_interval_lower_bound as lower_bound,\n",
+        "  forecast.prediction_interval_upper_bound as upper_bound\n",
+        "FROM\n",
+        "  forecast_result"
+      ]
+    },
+    {
+      "name": "forecast_kpis",
+      "displayName": "Forecast KPIs",
+      "queryLines": [
+        "WITH historical_sales AS (\n",
+        "  SELECT\n",
+        "    DATE(datetime) as date,\n",
+        "    SUM(money_amount) as daily_sales\n",
+        "  FROM\n",
+        "    workspace.default.coffee_sales\n",
+        "  GROUP BY\n",
+        "    DATE(datetime)\n",
+        "),\n",
+        "max_date AS (\n",
+        "  SELECT\n",
+        "    MAX(date) as last_date\n",
+        "  FROM\n",
+        "    historical_sales\n",
+        "),\n",
+        "forecast_data AS (\n",
+        "  SELECT\n",
+        "    date,\n",
+        "    daily_sales,\n",
+        "    AI_FORECAST(\n",
+        "      daily_sales,\n",
+        "      date,\n",
+        "      (\n",
+        "        SELECT\n",
+        "          last_date + INTERVAL 30 DAY\n",
+        "        FROM\n",
+        "          max_date\n",
+        "      )\n",
+        "    ) OVER (ORDER BY date ROWS BETWEEN 30 PRECEDING AND 30 FOLLOWING) as forecast\n",
+        "  FROM\n",
+        "    historical_sales\n",
+        "),\n",
+        "future_forecasts AS (\n",
+        "  SELECT\n",
+        "    forecast.forecast as forecasted_sales,\n",
+        "    forecast.forecast_timestamp as forecast_date\n",
+        "  FROM\n",
+        "    forecast_data CROSS JOIN UNNEST(forecast) as forecast\n",
+        "  WHERE\n",
+        "    forecast.forecast_timestamp\n",
+        "      > (\n",
+        "        SELECT\n",
+        "          last_date\n",
+        "        FROM\n",
+        "          max_date\n",
+        "      )\n",
+        ")\n",
+        "SELECT\n",
+        "  SUM(\n",
+        "    CASE\n",
+        "      WHEN\n",
+        "        forecast_date\n",
+        "          = (\n",
+        "            SELECT\n",
+        "              last_date + INTERVAL 1 DAY\n",
+        "            FROM\n",
+        "              max_date\n",
+        "          )\n",
+        "      THEN\n",
+        "        forecasted_sales\n",
+        "      ELSE 0\n",
+        "    END\n",
+        "  ) as next_day_forecast,\n",
+        "  SUM(\n",
+        "    CASE\n",
+        "      WHEN\n",
+        "        forecast_date BETWEEN\n",
+        "          (\n",
+        "            SELECT\n",
+        "              last_date + INTERVAL 1 DAY\n",
+        "            FROM\n",
+        "              max_date\n",
+        "          )\n",
+        "        AND\n",
+        "          (\n",
+        "            SELECT\n",
+        "              last_date + INTERVAL 7 DAY\n",
+        "            FROM\n",
+        "              max_date\n",
+        "          )\n",
+        "      THEN\n",
+        "        forecasted_sales\n",
+        "      ELSE 0\n",
+        "    END\n",
+        "  ) as next_week_forecast,\n",
+        "  SUM(\n",
+        "    CASE\n",
+        "      WHEN\n",
+        "        forecast_date BETWEEN\n",
+        "          (\n",
+        "            SELECT\n",
+        "              last_date + INTERVAL 1 DAY\n",
+        "            FROM\n",
+        "              max_date\n",
+        "          )\n",
+        "        AND\n",
+        "          (\n",
+        "            SELECT\n",
+        "              last_date + INTERVAL 30 DAY\n",
+        "            FROM\n",
+        "              max_date\n",
+        "          )\n",
+        "      THEN\n",
+        "        forecasted_sales\n",
+        "      ELSE 0\n",
+        "    END\n",
+        "  ) as next_month_forecast\n",
+        "FROM\n",
+        "  future_forecasts"
+      ]
+    },
+    {
+      "name": "customer_stats",
+      "displayName": "Customer Statistics",
+      "queryLines": [
+        "WITH customer_purchases AS (\n",
+        "  SELECT\n",
+        "    customer_id,\n",
+        "    COUNT(*) as purchase_count,\n",
+        "    SUM(money_amount) as total_spending\n",
+        "  FROM\n",
+        "    workspace.default.coffee_sales\n",
+        "  GROUP BY\n",
+        "    customer_id\n",
+        ")\n",
+        "SELECT\n",
+        "  COUNT(DISTINCT customer_id) as total_customers,\n",
+        "  COUNT(DISTINCT\n",
+        "    CASE\n",
+        "      WHEN purchase_count > 1 THEN customer_id\n",
+        "    END\n",
+        "  ) as repeat_customers,\n",
+        "  AVG(total_spending) as avg_spending_per_customer,\n",
+        "  MAX(total_spending) as highest_spending\n",
+        "FROM\n",
+        "  customer_purchases"
+      ]
+    },
+    {
+      "name": "top_customers",
+      "displayName": "Top Customers",
+      "queryLines": [
+        "SELECT\n",
+        "  customer_id,\n",
+        "  SUM(money_amount) as total_spending\n",
+        "FROM\n",
+        "  workspace.default.coffee_sales\n",
+        "GROUP BY\n",
+        "  customer_id\n",
+        "ORDER BY\n",
+        "  total_spending DESC"
+      ]
+    },
+    {
+      "name": "coffee_by_segment",
+      "displayName": "Favorite Coffee by Segment",
+      "queryLines": [
+        "WITH customer_segment AS (\n",
+        "  SELECT\n",
+        "    customer_id,\n",
+        "    CASE\n",
+        "      WHEN COUNT(*) = 1 THEN 'New'\n",
+        "      ELSE 'Repeat'\n",
+        "    END as segment\n",
+        "  FROM\n",
+        "    workspace.default.coffee_sales\n",
+        "  GROUP BY\n",
+        "    customer_id\n",
+        ")\n",
+        "SELECT\n",
+        "  cs.segment,\n",
+        "  c.coffee_name,\n",
+        "  COUNT(*) as order_count\n",
+        "FROM\n",
+        "  workspace.default.coffee_sales c\n",
+        "    JOIN customer_segment cs\n",
+        "      ON c.customer_id = cs.customer_id\n",
+        "GROUP BY\n",
+        "  cs.segment,\n",
+        "  c.coffee_name\n",
+        "ORDER BY\n",
+        "  cs.segment,\n",
+        "  order_count DESC"
+      ]
+    },
+    {
+      "name": "spending_vs_frequency",
+      "displayName": "Spending vs Purchase Frequency",
+      "queryLines": [
+        "SELECT\n",
+        "  customer_id,\n",
+        "  COUNT(*) as purchase_frequency,\n",
+        "  SUM(money_amount) as total_spending\n",
+        "FROM\n",
+        "  workspace.default.coffee_sales\n",
+        "GROUP BY\n",
+        "  customer_id"
+      ]
+    },
+    {
+      "name": "purchase_frequency",
+      "displayName": "Purchase Frequency Distribution",
+      "queryLines": [
+        "WITH customer_purchases AS (\n",
+        "  SELECT\n",
+        "    customer_id,\n",
+        "    COUNT(*) as purchase_count\n",
+        "  FROM\n",
+        "    workspace.default.coffee_sales\n",
+        "  GROUP BY\n",
+        "    customer_id\n",
+        ")\n",
+        "SELECT\n",
+        "  purchase_count,\n",
+        "  COUNT(*) as customer_count\n",
+        "FROM\n",
+        "  customer_purchases\n",
+        "GROUP BY\n",
+        "  purchase_count\n",
+        "ORDER BY\n",
+        "  purchase_count"
+      ]
+    },
+    {
+      "name": "customer_segment",
+      "displayName": "Customer Segmentation",
+      "queryLines": [
+        "WITH customer_purchases AS (\n",
+        "  SELECT\n",
+        "    customer_id,\n",
+        "    COUNT(*) as purchase_count,\n",
+        "    CASE\n",
+        "      WHEN COUNT(*) = 1 THEN 'New Customer'\n",
+        "      ELSE 'Repeat Customer'\n",
+        "    END as customer_type\n",
+        "  FROM\n",
+        "    workspace.default.coffee_sales\n",
+        "  GROUP BY\n",
+        "    customer_id\n",
+        ")\n",
+        "SELECT\n",
+        "  customer_type,\n",
+        "  COUNT(*) as customer_count\n",
+        "FROM\n",
+        "  customer_purchases\n",
+        "GROUP BY\n",
+        "  customer_type"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "0d3c1c1c",
+      "displayName": "Sales Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "total_sales_kpi",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "sales_overview",
+                  "fields": [
+                    {
+                      "name": "measure(total_sales)",
+                      "expression": "MEASURE(`total_sales`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Total Sales",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(total_sales)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "total_transactions_kpi",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "sales_overview",
+                  "fields": [
+                    {
+                      "name": "measure(transaction_count)",
+                      "expression": "MEASURE(`transaction_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Total Transactions",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(transaction_count)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "avg_order_value_kpi",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "sales_overview",
+                  "fields": [
+                    {
+                      "name": "measure(avg_order_value)",
+                      "expression": "MEASURE(`avg_order_value`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Average Order Value",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(avg_order_value)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "total_customers_kpi",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "sales_overview",
+                  "fields": [
+                    {
+                      "name": "measure(unique_customers)",
+                      "expression": "MEASURE(`unique_customers`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Total Customers",
+                "showTitle": true
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(unique_customers)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 0,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "sales_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "sales_overview",
+                  "fields": [
+                    {
+                      "name": "date_only",
+                      "expression": "`date_only`"
+                    },
+                    {
+                      "name": "measure(total_sales)",
+                      "expression": "MEASURE(`total_sales`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Sales Trend",
+                "showTitle": true
+              },
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "date_only",
+                  "displayName": "date_only",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(total_sales)",
+                  "displayName": "total_sales",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "sales_by_day",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "sales_overview",
+                  "fields": [
+                    {
+                      "name": "day_name",
+                      "expression": "`day_name`"
+                    },
+                    {
+                      "name": "measure(total_sales)",
+                      "expression": "MEASURE(`total_sales`)"
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "expression": "IN_RANGE(`day_of_week`, NULL, NULL)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Sales by Day of Week",
+                "showTitle": false,
+                "showDescription": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "day_name",
+                  "displayName": "day_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(total_sales)",
+                  "displayName": "total_sales",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "day_name",
+                  "displayName": "day_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 4,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "sales_by_month",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "sales_overview",
+                  "fields": [
+                    {
+                      "name": "month",
+                      "expression": "`month`"
+                    },
+                    {
+                      "name": "measure(total_sales)",
+                      "expression": "MEASURE(`total_sales`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Sales by Month",
+                "showTitle": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "month",
+                  "displayName": "month",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(total_sales)",
+                  "displayName": "total_sales",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "payment_distribution",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "sales_overview",
+                  "fields": [
+                    {
+                      "name": "measure(transaction_count)",
+                      "expression": "MEASURE(`transaction_count`)"
+                    },
+                    {
+                      "name": "cash_type",
+                      "expression": "`cash_type`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Payment Type Distribution",
+                "showTitle": true
+              },
+              "widgetType": "pie",
+              "encodings": {
+                "angle": {
+                  "fieldName": "measure(transaction_count)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "cash_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 12,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "9d2c9ebb",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "customer_segment",
+                  "fields": [
+                    {
+                      "name": "customer_type",
+                      "expression": "`customer_type`"
+                    },
+                    {
+                      "name": "sum(customer_count)",
+                      "expression": "SUM(`customer_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "New vs Repeat Customers",
+                "showTitle": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "customer_type",
+                  "displayName": "customer_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(customer_count)",
+                  "displayName": "customer_count",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "customer_type",
+                  "displayName": "customer_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 20,
+            "width": 4,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "99591f4b",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "coffee_by_segment",
+                  "fields": [
+                    {
+                      "name": "coffee_name",
+                      "expression": "`coffee_name`"
+                    },
+                    {
+                      "name": "sum(order_count)",
+                      "expression": "SUM(`order_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Favorite Coffee by Segment",
+                "showTitle": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "coffee_name",
+                  "displayName": "coffee_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(order_count)",
+                  "displayName": "order_count",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "coffee_name",
+                  "displayName": "coffee_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 20,
+            "width": 8,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}
